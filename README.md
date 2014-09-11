@@ -9,9 +9,9 @@ Claudio Fahey (claudio.fahey@emc.com)
 
 # Overview
 
-This Hadoop Test Driver runs DFS I/O, Teragen, and Terasort benchmarks with a variety of parameters in a completely unattended manner. The results will be record to a CSV file allowing them to be analyzed later.
+This Hadoop Test Driver runs DFS I/O, Teragen, and Terasort benchmarks with a variety of parameters in a completely unattended manner. The results will be record to a JSON file allowing them to be analyzed by [test-result-analyzer](https://github.com/claudiofahey/test-result-analyzer).
 
-The DFS IO test is a modified version of TestDFSIO that forces all I/O to be performed simultaneously, avoiding skew caused by slow running tasks.
+An optional custom DFS IO test is a modified version of TestDFSIO that forces all I/O to be performed simultaneously, avoiding skew caused by slow running tasks.
 
 # Prerequisites
 
