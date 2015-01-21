@@ -22,15 +22,16 @@ push(@testList, {
 });
 
 foreach my $numIsilonNodes (4) {                    # Must only decrease by amount that maintains quorum. Increase must be done manually.
-foreach my $repeat (1..10) {
-foreach my $numComputeNodes ($numIsilonNodes*2) {   # should normally decrease                
-foreach my $blockSizeMiB (128) {                    # no effect
-foreach my $hdfsThreads (96) {                      # minimum effective value is 16, max is 255, auto=64 on S200, 96 on X400; no noticable effect
+foreach my $repeat (1..3) {
+foreach my $numComputeNodes (11, 8, 6) {   # should normally decrease # 11, 8, 6
+foreach my $blockSizeMiB (512) {                    # no effect
+foreach my $hdfsThreads (256) {                     # should always be 256
 foreach my $ioFileBufferSizeKiB (128) {             # no noticable effect
 foreach my $protectionLevel ("21") {                # "21", "1", "2x", "3x"
 foreach my $dataAccessPattern ("streaming") {
 foreach my $smartCache (1) {                        # best is 1 (enabled)
-foreach my $mapTasksPerIsilonNode (4, 32, 56, 170, 100, 10, 18) {
+foreach my $mapTasksPerIsilonNode (18, 32, 10, 56, 4, 100) { #4, 32, 56, 170, 100, 10, 18
+foreach my $testVariant ('com.emc.hadoop') {        # 'com.emc.hadoop','standard'
 
     my $nrFiles = int($mapTasksPerIsilonNode * $numIsilonNodes);
 
@@ -59,8 +60,10 @@ foreach my $mapTasksPerIsilonNode (4, 32, 56, 170, 100, 10, 18) {
     $baseDirectory .= "/hduser1";
 
     my $common = {
+        appMasterMemoryMB => 4096,
         baseDirectory => $baseDirectory,
         blockSizeMiB => $blockSizeMiB,
+        collectPerfDataIsilon => 0,
         dataAccessPattern => $dataAccessPattern,
         hdfsThreads => $hdfsThreads,
         ioFileBufferSize => $ioFileBufferSizeKiB*1024,
@@ -72,35 +75,60 @@ foreach my $mapTasksPerIsilonNode (4, 32, 56, 170, 100, 10, 18) {
         protectionLevel => $protectionLevel,
         smartCache => $smartCache,
         sortMiB => 1,
-        startIOSec => $startIOSec,
-        testVariant => 'com.emc.hadoop',
+        testVariant => $testVariant,
         };
         
     my $t;
 
-    # Write (measurement only)
-    foreach my $repeat_write (1..2) {
-        $t = {%$common};
-        $t->{test} = "write";
-        $t->{stopAfterSec} = $stopAfterSecWrite;    # measurement stops after this many seconds
-        push(@testList, $t);
-    }
-    
-    # Write (measurement + prepare for read)
-    $t = {%$common};
-    $t->{test} = "write";
-    $t->{stopAfterSec} = $stopAfterSecWrite;    # measurement stops after this many seconds
-    $t->{dataSizeMB} = $minWriteMB;             # write at least this many MB
-    push(@testList, $t);
+    if ($testVariant eq "com.emc.hadoop") {
+        # com.emc.hadoop TestDFSIO
+        # Write (measurement only)
+        foreach my $repeat_write (1..0) {
+            $t = {%$common};
+            $t->{test} = "write";
+            $t->{startIOSec} = $startIOSec;
+            $t->{stopAfterSec} = $stopAfterSecWrite;    # measurement stops after this many seconds
+            push(@testList, $t);
+        }
+        
+        # Write (measurement + prepare for read)
+        if (1) {
+            $t = {%$common};
+            $t->{test} = "write";
+            $t->{startIOSec} = $startIOSec;
+            $t->{stopAfterSec} = $stopAfterSecWrite;    # measurement stops after this many seconds
+            $t->{dataSizeMB} = $minWriteMB;             # write at least this many MB
+            push(@testList, $t);
+        }
 
-    # Read
-    foreach my $repeat_read (1..3) {
-        $t = {%$common};
-        $t->{test} = "read";
-        $t->{stopAfterSec} = $stopAfterSecRead;    # measurement stops after this many seconds
-        push(@testList, $t);
+        # Read
+        foreach my $repeat_read (1..1) {
+            $t = {%$common};
+            $t->{test} = "read";
+            $t->{startIOSec} = $startIOSec;
+            $t->{stopAfterSec} = $stopAfterSecRead;    # measurement stops after this many seconds
+            push(@testList, $t);
+        }
     }
-}}}}}}}}}}
+    else {
+        # Standard TestDFSIO
+        # Write
+        foreach my $repeat_write (1..1) {
+            $t = {%$common};
+            $t->{test} = "write";
+            $t->{dataSizeMB} = $minWriteMB;
+            push(@testList, $t);
+        }
+
+        # Read
+        foreach my $repeat_read (1..1) {
+            $t = {%$common};
+            $t->{test} = "read";
+            $t->{dataSizeMB} = $minWriteMB;
+            push(@testList, $t);
+        }
+    }
+}}}}}}}}}}}
 
 # Print test list in Perl format.
 local $Data::Dumper::Indent = 3;

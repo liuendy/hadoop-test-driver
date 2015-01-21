@@ -1,12 +1,11 @@
 #!/usr/bin/perl
 #
 my $appname = "hadoop-test-driver";
-my $version = "0.61";
 #
 # Written by Claudio Fahey (claudio.fahey@emc.com)
 #
 # Installation:
-#   $ sudo yum install perl-JSON perl-File-Slurp
+#   $ sudo yum install perl-JSON perl-XML-Simple perl-File-Slurp uuid-perl
 #
 # Usage 1:
 #   $ ./generate-terasort-tests.pl > terasort.tests
@@ -23,7 +22,9 @@ use warnings;
 use Switch;
 use FileHandle;
 use Data::Dumper;
+use Data::UUID;
 use JSON;
+use XML::Simple;
 use File::Slurp "slurp";
 use Error qw(:try); 
 use POSIX;
@@ -75,6 +76,11 @@ our %defaultConfig = (
         hadoopParameters => "",
         hadoopWsPort => 8088,
         testVariant => 'standard',
+        collectPerfDataIsilon => 0,
+        perfDataStartMeasurementSec => 60,
+        perfDataStopAfterSec => 60,
+        hadoopAuthentication => 'standard',
+        yarnServiceControlMethod => 'service',
         },
     read => {
         testVariant => 'com.emc.hadoop',
@@ -181,7 +187,7 @@ die "No configuration file specified" unless $haveConfig;
 
 # Open log file
 my $logFile = FileHandle->new($logFileName, "a");
-Print("$appname BEGIN (version $version)\n");
+Print("$appname BEGIN\n");
 
 # Apply defaults, site, and common configuration parameters to test list.
 # Apply configuration for "all" test then specific test.
@@ -266,6 +272,12 @@ sub RunAllTests
 	        $config->{sequenceInTestBatch} = $i;
 	        $config->{sizeOfTestBatch} = $numTests;
             $config->{testAttempt} = 0;
+            if (!$config->{testUuid})
+                {
+                my $ug = new Data::UUID;
+                $config->{testUuid} = $ug->create_str();
+                print "uuid=" . $config->{testUuid} . "\n";
+                }
             	        
             my $stop = 0;
 	        while ($stop == 0)
@@ -291,6 +303,9 @@ sub RunAllTests
                     sleep(5);
 	                };
 	            }
+
+	        Print("*****************************************************************\n");
+	        Print("All $numTests tests completed. ($GlobalErrorCount errors, $GlobalWarningCount warnings)\n");
             }
         }
     }
@@ -368,21 +383,23 @@ sub System
 
 sub SystemCommand
     {
-    my ($cmd) = @_;
+    my ($cmd, $print_stdout) = @_;
+    $print_stdout = defined($print_stdout) ? $print_stdout : 1;
     Print "# $cmd\n";
     my $stdout = qx($cmd);
     my $exit_code = $?;
     chomp($stdout);
     $stdout .= "\n";
-    Print $stdout;
+    Print $stdout if $print_stdout;
     Print("Exit code=$exit_code\n");
     return ($exit_code, $stdout);
     }
 
 sub Ssh
     {
-    my ($user, $host, $command) = @_;
-    my $cmd = "ssh $user\@$host \"$command\" 2>&1";
+    my ($user, $host, $command, $opts) = @_;
+    $opts = '' if !defined($opts);
+    my $cmd = "ssh $opts $user\@$host \"$command\" 2>&1";
     Print "# $cmd\n";
     my $stdout = qx($cmd);
     my $exit_code = $?;
@@ -408,10 +425,23 @@ sub CallWebService
     my $cmd = "curl --insecure --silent";
     $cmd .= " --user $username:$password" if defined($password);
     $cmd .= " $url";
-    my ($exit_code, $stdout) = SystemCommand($cmd);
+    my ($exit_code, $stdout) = SystemCommand($cmd, 0);
     throw Error::Simple("Error calling web service $url") if $exit_code != 0;    
     my $result = decode_json($stdout);
-    Print(Data::Dumper->Dump([$result], ['CallWebService_result'])) if $verbose;;
+    Print(Data::Dumper->Dump([$result], ['CallWebService_result'])) if $verbose;
+    return $result;    
+    }
+
+sub CallWebServiceXML
+    {
+    my ($url, $username, $password) = @_;
+    my $cmd = "curl --insecure --silent";
+    $cmd .= " --user $username:$password" if defined($password);
+    $cmd .= " $url";
+    my ($exit_code, $stdout) = SystemCommand($cmd, 0);
+    throw Error::Simple("Error calling web service $url") if $exit_code != 0;    
+    my $result = XMLin($stdout, KeyAttr => []);
+    Print(Data::Dumper->Dump([$result], ['CallWebServiceXML_result'])) if $verbose;
     return $result;    
     }
 
@@ -421,6 +451,7 @@ sub GetComputeNodeInfo
     my $baseYarnUrl = "http://" . $config->{hadoopClientHost} . ":" . $config->{hadoopWsPort};
     my $info = CallWebService("$baseYarnUrl/ws/v1/cluster/nodes");
     $config->{computeNodeInfo} = $info;
+    $config->{hadoopResourceManagerConf} = CallWebServiceXML("$baseYarnUrl/conf");
     return $info;
     }
 
@@ -456,6 +487,20 @@ sub GetNumComputeNodes
     my $count = scalar(@nodes);
     Print("GetNumComputeNodes=$count\n");
     return scalar($count);
+    }
+
+sub GetCompletedJobInfo
+    {
+    my ($config) = @_;
+    if (defined($config->{hadoopJobId}))
+        {
+        my $baseHistoryUrl = "http://" . $config->{hadoopClientHost} . ":19888";
+        my $jobHistoryUrl = "$baseHistoryUrl/ws/v1/history/mapreduce/jobs/" . $config->{hadoopJobId};
+        $config->{hadoopJobInfo} = CallWebService($jobHistoryUrl);
+        $config->{hadoopJobConf} = CallWebService("$jobHistoryUrl/conf");
+        $config->{hadoopJobCounters} = CallWebService("$jobHistoryUrl/counters");
+        $config->{hadoopJobTasks} = CallWebService("$jobHistoryUrl/tasks");
+        }
     }
 
 sub GetIsilonNodeInfo
@@ -506,6 +551,27 @@ sub ConfigureCompute
     my ($config) = @_;
     return if $noop;
 
+    my $NMStartCmd;
+    my $NMStopCmd;
+    my $RMRestartCmd;
+    my $SshOpts = "";
+    if ($config->{yarnServiceControlMethod} eq "yarn-daemon.sh")
+        {
+        # Below commands are used by Ambari on HDP 2.1.
+        $NMStartCmd   = "sudo -u yarn HADOOP_LIBEXEC_DIR=/usr/lib/hadoop/libexec /usr/lib/hadoop-yarn/sbin/yarn-daemon.sh --config /etc/hadoop/conf start nodemanager";
+        $NMStopCmd    = "sudo -u yarn HADOOP_LIBEXEC_DIR=/usr/lib/hadoop/libexec /usr/lib/hadoop-yarn/sbin/yarn-daemon.sh --config /etc/hadoop/conf stop  nodemanager";
+        $RMRestartCmd = "sudo -u yarn HADOOP_LIBEXEC_DIR=/usr/lib/hadoop/libexec /usr/lib/hadoop-yarn/sbin/yarn-daemon.sh --config /etc/hadoop/conf stop  resourcemanager"
+                   . " ; sudo -u yarn HADOOP_LIBEXEC_DIR=/usr/lib/hadoop/libexec /usr/lib/hadoop-yarn/sbin/yarn-daemon.sh --config /etc/hadoop/conf start resourcemanager";
+        $SshOpts      = "-tt";  # This is required to be able to do ssh sudo. This will result in warning message "tcgetattr: Invalid argument" which can be ignored.
+        }
+    else
+        {
+        # Below commands are used by PHD 2.1.
+        $NMStartCmd   = "service hadoop-yarn-nodemanager     start";
+        $NMStopCmd    = "service hadoop-yarn-nodemanager     stop";
+        $RMRestartCmd = "service hadoop-yarn-resourcemanager stop ; service hadoop-yarn-resourcemanager start";        
+        }
+
     if (defined($config->{numComputeNodes}))
         {
         # numComputeNodes specified; change environment as necessary
@@ -520,18 +586,17 @@ sub ConfigureCompute
                 }
             elsif ($excessNodes > 0)
                 {
-                Print("Reducing number of compute nodes by $excessNodes.\n");
+                Print("Reducing number of compute nodes by $excessNodes.\n");                
                 # Stop the node manager on the hosts in reverse order.
                 foreach my $node (reverse(@nodeHostNames))
                     {
                     Print("Stopping node $node\n");
-                    my $cmd = "service hadoop-yarn-nodemanager stop";
-                    my ($exit_code, $output) = Ssh("root", $node, $cmd);
+                    my ($exit_code, $output) = Ssh("root", $node, $NMStopCmd, $SshOpts);
                     $excessNodes--;
                     last if $excessNodes == 0;
                     }
-                my $cmd = "service hadoop-yarn-resourcemanager restart";
-                my ($exit_code, $output) = Ssh("root", $config->{hadoopClientHost}, $cmd);
+                # Restart Resource Manager to reflect node count immediately
+                my ($exit_code, $output) = Ssh("root", $config->{hadoopClientHost}, $RMRestartCmd, $SshOpts);
                 }
             else
                 {
@@ -541,12 +606,12 @@ sub ConfigureCompute
                 foreach my $node (GetAllComputeNodeHostNames($config))
                     {
                     Print("Starting node $node\n");
-                    my $cmd = "service hadoop-yarn-nodemanager start";
-                    my ($exit_code, $output) = Ssh("root", $node, $cmd);
+                    my ($exit_code, $output) = Ssh("root", $node, $NMStartCmd, $SshOpts);
                     }
                 }
             # Wait for the resource manager to get the correct node count.
-            sleep(30);
+            Print("Waiting for Resource Manager to initialize.\n");
+            sleep(45);
             }
         }
     else
@@ -655,6 +720,14 @@ sub ConfigureIsilon
             throw Error::Simple("Unable to set Isilon HDFS threads");
             }
         }
+
+    if ($config->{collectPerfDataIsilon})
+        {
+        if (!RunIsilonCommand($config, "mkdir -p /ifs/pcdata ; isi services -a isi_ph_rpcd enable"))
+            {
+            throw Error::Simple("Unable to enable Isilon performance collector daemon");
+            }
+        }
         
     FlushIsilonCache($config);
     }
@@ -748,9 +821,25 @@ sub RunIsilonCommand
     return 1;
     }
 
+sub HadoopAuthenticate
+    {
+    my ($config) = @_;
+    if ($config->{hadoopAuthentication} eq 'kerberos')
+        {
+        die unless defined($config->{kerberosKeytab});
+        die unless defined($config->{kerberosPrincipalName});
+        my $cmd = "kinit -kt " . $config->{kerberosKeytab} . ' ' . $config->{kerberosPrincipalName};
+        if (!RunHadoopCommand($config, $cmd))
+            {
+            throw Error::Simple("Unable to initialize Kerberos");
+            }
+        }
+    }
+
 sub KillAllJobs
     {
     my ($config) = @_;
+    HadoopAuthenticate($config);
     my $cmd = "mapred job -list | grep job_ | awk ' { system(\\\"mapred job -kill \\\" \\\$1) } '";
     if (!RunHadoopCommand($config, $cmd, 1))
         {
@@ -761,6 +850,7 @@ sub KillAllJobs
 sub DeleteDirectory
     {
     my ($config, $dir) = @_;
+    HadoopAuthenticate($config);
     my $cmd = "hadoop fs -rm -r -f -skipTrash $dir";
     if (!RunHadoopCommand($config, $cmd))
         {
@@ -799,6 +889,22 @@ sub FlushComputeCache
         }
     }
 
+sub StartPerfDataCollector
+    {
+    # This will start the performance collector and then return.
+    my ($config) = @_;
+    if ($config->{collectPerfDataIsilon})
+        {
+        $config->{perfDataDir} = "/ifs/pcdata/" . $config->{test} . "-" . $config->{testUuid};
+        my $cmd = "(sleep " . $config->{perfDataStartMeasurementSec} . " ; isi_ph_pc -d " . $config->{perfDataDir} . " -t " .
+                  $config->{perfDataStopAfterSec} . " \\`isi_nodes %{internal}\\`) > /dev/null 2>&1 &";
+        if (!RunIsilonCommand($config, $cmd))
+            {
+            throw Error::Simple("Unable to start Isilon performance collection");
+            }
+        }
+    }
+
 sub SkipTest
     {
     my ($config) = @_;
@@ -813,7 +919,6 @@ sub SkipTest
         }
     return 0;
     }
-
 
 sub RunHadoopJob
     {
@@ -831,17 +936,20 @@ sub RunHadoopJob
         }    
     else
         {
+        HadoopAuthenticate($config);
+        StartPerfDataCollector($config);
         my $time0 = time;
         my ($exit_code, $output) = Ssh($config->{hadoopClientUser}, $config->{hadoopClientHost}, $config->{hadoopCommand});
         my $elapsed_sec = time - $time0;
         Print "elapsed_sec=$elapsed_sec\n";            
         $config->{hadoopCommandOutput} = $output;
-        $config->{hadoopCommandExitCode} = $output;
+        $config->{hadoopCommandExitCode} = $exit_code;
         $config->{error} = ($exit_code != 0) ? 1 : 0;
         $config->{elapsedSec} = $elapsed_sec;
         $config->{bytesReadHDFS} = GetRegEx($output, "Bytes Read=(.*)");
         $config->{bytesWrittenHDFS} = GetRegEx($output, "Bytes Written=(.*)");
         $config->{hadoopJobId} = GetRegEx($output, "Running job: (job_[0-9_]+)");
+        GetCompletedJobInfo($config);
         return ($exit_code, $output);
         }    
     }
@@ -881,6 +989,7 @@ sub TestDFSIO
             " -DstartMeasurementSec=" . $config->{startMeasurementSec} .
             " -DstopAfterSec=" . $config->{stopAfterSec};
         $config->{jar} = ($config->{jar}) // ($config->{customJar});                #/
+        $config->{perfDataStartMeasurementSec} = $config->{startIOSec} + $config->{startMeasurementSec};
         }
     else
         {

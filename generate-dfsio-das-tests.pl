@@ -21,13 +21,13 @@ push(@testList, {
     test => "killalljobs",
 });
 
-foreach my $repeat (1..1) {
-foreach my $numComputeNodes (10) {                  # must equal number of data nodes for DAS
-foreach my $blockSizeMiB (128) {                    # no noticable effect
+foreach my $repeat (1..3) {
+foreach my $numComputeNodes (5) {                  # must equal number of data nodes for DAS
+foreach my $blockSizeMiB (512) {                    # no noticable effect
 foreach my $ioFileBufferSizeKiB (128) {             # no noticable effect
 foreach my $protectionLevel ("3x") {                # "21", "1", "2x", "3x"
 foreach my $dataAccessPattern ("streaming") {
-foreach my $mapTasksPerComputeNode (90, 8, 10) {    # 10, 39, 5, 18, 28
+foreach my $mapTasksPerComputeNode (59, 90, 5, 8, 10, 18, 28, 39) {    # 
 
     my $nrFiles = int($mapTasksPerComputeNode * $numComputeNodes);
 
@@ -46,7 +46,7 @@ foreach my $mapTasksPerComputeNode (90, 8, 10) {    # 10, 39, 5, 18, 28
     # Minimum MB to write to ensure that subsequent read has enough data.
     # The value on the next line must be large enough so that the fastest task on a node is not faster than this rate divided by the number of tasks on the node.
     # Increase this value if read tests fail with exception "Got to end of file before stop time".
-    my $maxReadMBPerSecPerComputeNode = 1500.0;
+    my $maxReadMBPerSecPerComputeNode = 2500.0;
     my $actualReadSec = $startMeasurementSec + $stopAfterSecRead;  
     my $minWriteMB = $maxReadMBPerSecPerComputeNode * $actualReadSec * $numComputeNodes;
     
@@ -59,13 +59,13 @@ foreach my $mapTasksPerComputeNode (90, 8, 10) {    # 10, 39, 5, 18, 28
         blockSizeMiB => $blockSizeMiB,
         dataAccessPattern => $dataAccessPattern,
         ioFileBufferSize => $ioFileBufferSizeKiB*1024,
-        mapMemoryMB => 32,      # Note that task will use a lot more virtual memory than this amount.
+        mapMemoryMB => 28,      # Note that task will use a lot more virtual memory than this amount.
         maxTestAttempts => 3,
         nrFiles => $nrFiles,
         numComputeNodes => $numComputeNodes,
         numIsilonNodes => 0,
         protectionLevel => $protectionLevel,
-        sortMiB => 4,
+        sortMiB => 1,
         startIOSec => $startIOSec,
         testVariant => 'com.emc.hadoop',
         };
