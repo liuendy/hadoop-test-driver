@@ -156,13 +156,6 @@ This will allow you to record other environmental parameters.
 |                             | slots to allow each map task to run concurrently. The job will ensure that each task runs at exactly    |
 |                             | the right time or it throws an exception if unable to do so.                                            |
 +-----------------------------+---------------------------------------------------------------------------------------------------------+
-| startIOSec                  | I/O will begin this many seconds after the job is submitted. All tasks must have started by this time   |
-|                             | or the job will fail.                                                                                   |
-+-----------------------------+---------------------------------------------------------------------------------------------------------+
-| startMeasurementSec         | Measurement of I/O speed will begin this many seconds after I/O begins.                                 |
-+-----------------------------+---------------------------------------------------------------------------------------------------------+
-| stopAfterSec                | I/O will stop this many seconds after measurement begins.                                               |
-+-----------------------------+---------------------------------------------------------------------------------------------------------+
 | **Teragen Parameters**      |                                                                                                         |
 +-----------------------------+---------------------------------------------------------------------------------------------------------+
 | dataSizeMB                  | The total size of all files generated.                                                                  |
