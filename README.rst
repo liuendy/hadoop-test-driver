@@ -39,7 +39,7 @@ Prerequisites
 Installation
 ************
 
-1. Extract hadoop-test-driver.tar.gz to your Linux server.
+1. Copy the contents of this hadoop-test-driver repository to your Linux server.
 
 2. Copy site.cfg to mysite.cfg and edit mysite.cfg with the desired parameters that describe your site.
 
@@ -51,7 +51,7 @@ Running DFS IO Tests
 
 2. Run the above script to save the test definitions to a file.
 
-   $ ./generate- dfsio -tests.pl > dfsio.tests
+   $ ./generate-dfsio-tests.pl > dfsio.tests
 
 3. Run the test driver with the site configuration and the test definitions:
 

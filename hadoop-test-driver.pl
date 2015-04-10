@@ -52,7 +52,6 @@ our %defaultConfig = (
     all => {
         flushIsilon => 0,
         flushCompute => 0,
-        resultCsvFilename => "$appname.csv",
         resultJsonFilename => "$appname.json",
         examplesJar => "/usr/lib/gphd/hadoop-mapreduce/hadoop-mapreduce-examples.jar",
         jobClientJar => "/usr/lib/gphd/hadoop-mapreduce/hadoop-mapreduce-client-jobclient.jar",
