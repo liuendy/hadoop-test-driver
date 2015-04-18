@@ -4,7 +4,6 @@ ConvertCsvToJson.pl
 *.txt
 collect-logs.sh
 *.jar
-configure-ssh.sh
 *.csv
 *.log
 *.lnk
@@ -17,3 +16,5 @@ show-stats.sh
 *.tests
 *~
 hadoop-test-driver-0.5.pl
+mapredlogs
+

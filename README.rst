@@ -43,6 +43,10 @@ Installation
 
 2. Copy site.cfg to mysite.cfg and edit mysite.cfg with the desired parameters that describe your site.
 
+3. Install Perl modules:
+   - On Ubuntu: sudo apt-get install libjson-perl libxml-simple-perl libfile-slurp-perl libdata-uuid-perl liberror-perl
+   - On CentOS/Redhat: sudo yum install perl-JSON perl-XML-Simple perl-File-Slurp uuid-perl perl-Error   
+
 ********************
 Running DFS IO Tests
 ********************

@@ -4,9 +4,6 @@ my $appname = "hadoop-test-driver";
 #
 # Written by Claudio Fahey (claudio.fahey@emc.com)
 #
-# Installation:
-#   $ sudo yum install perl-JSON perl-XML-Simple perl-File-Slurp uuid-perl
-#
 # Usage 1:
 #   $ ./generate-terasort-tests.pl > terasort.tests
 #   $ ./hadoop-test-driver.pl site.cfg terasort.tests
@@ -28,6 +25,8 @@ use XML::Simple;
 use File::Slurp "slurp";
 use Error qw(:try); 
 use POSIX;
+use File::Temp;
+use File::Path qw(make_path);
 
 ###########################################################################
 # Initialize
@@ -302,10 +301,9 @@ sub RunAllTests
                     sleep(5);
 	                };
 	            }
-
-	        Print("*****************************************************************\n");
-	        Print("All $numTests tests completed. ($GlobalErrorCount errors, $GlobalWarningCount warnings)\n");
             }
+	    Print("*****************************************************************\n");
+	    Print("All $numTests tests completed. ($GlobalErrorCount errors, $GlobalWarningCount warnings)\n");
         }
     }
         
@@ -332,7 +330,7 @@ sub RunTest
     Print("Running test '$test' with the following configuration:\n");
     Print(Data::Dumper->Dump([$config], ['config']));
 
-    switch ($test)
+   switch ($test)
         {
         case "localcommand"     {RunLocalCommand($config, $config->{command}, 1);}
         case "hadoopcommand"    {RunHadoopCommand($config, $config->{command}, 1);}
@@ -416,6 +414,7 @@ sub GetRegEx
         {
         return $1;
         }
+    return undef;
     }
 
 sub CallWebService
@@ -429,6 +428,19 @@ sub CallWebService
     my $result = decode_json($stdout);
     Print(Data::Dumper->Dump([$result], ['CallWebService_result'])) if $verbose;
     return $result;    
+    }
+    
+sub TryCallWebService
+    {
+    my ($url, $username, $password) = @_;
+    try
+        {
+        return CallWebService($url, $username, $password);
+        }
+    catch Error with
+        {
+        return undef;
+        }       
     }
 
 sub CallWebServiceXML
@@ -495,13 +507,32 @@ sub GetCompletedJobInfo
         {
         my $baseHistoryUrl = "http://" . $config->{hadoopClientHost} . ":19888";
         my $jobHistoryUrl = "$baseHistoryUrl/ws/v1/history/mapreduce/jobs/" . $config->{hadoopJobId};
-        $config->{hadoopJobInfo} = CallWebService($jobHistoryUrl);
-        $config->{hadoopJobConf} = CallWebService("$jobHistoryUrl/conf");
-        $config->{hadoopJobCounters} = CallWebService("$jobHistoryUrl/counters");
-        $config->{hadoopJobTasks} = CallWebService("$jobHistoryUrl/tasks");
+        $config->{hadoopJobInfo} = TryCallWebService($jobHistoryUrl);
+        $config->{hadoopJobConf} = TryCallWebService("$jobHistoryUrl/conf");
+        $config->{hadoopJobCounters} = TryCallWebService("$jobHistoryUrl/counters");
+        $config->{hadoopJobTasks} = TryCallWebService("$jobHistoryUrl/tasks");
         }
+    CollectMapRedLogs($config);
     }
 
+# This script must run directly on a Hadoop node since it runs "mapred".
+sub CollectMapRedLogs
+    {
+    my ($config) = @_;
+    if (defined($config->{mapRedLogDir}) && defined($config->{hadoopJobId}))
+        {
+        my $logDir = File::Temp->newdir();
+        my $jobId = $config->{hadoopJobId};
+        make_path($config->{mapRedLogDir});
+        my $mapRedLogArchiveFile = $config->{mapRedLogDir} . "/$jobId--" . $config->{testUuid} . ".tar.bz2";
+        System("mapred job -list-attempt-ids $jobId MAP    completed | xargs -P 50 -n 1 -I{} sh -c \"mapred job -logs $jobId {} > $logDir/{}.log\"");
+        System("mapred job -list-attempt-ids $jobId REDUCE completed | xargs -P 50 -n 1 -I{} sh -c \"mapred job -logs $jobId {} > $logDir/{}.log\"");
+        System("mapred job -logs $jobId > $logDir/appmaster.log");
+        System("tar -cjvf $mapRedLogArchiveFile -C $logDir .");
+        $config->{mapRedLogArchiveFile} = $mapRedLogArchiveFile;
+        }
+    }
+    
 sub GetIsilonNodeInfo
     {
     my ($config) = @_;
